@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /download/
+Disallow: /upload
+
+# Sitemap
+Sitemap: https://wcl-forecasting.com/sitemap.xml
+
+# Crawl-delay
+Crawl-delay: 1

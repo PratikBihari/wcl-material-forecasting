@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <!-- SEO Meta Tags -->
+    <title>WCL Material Procurement Forecasting | Western Coalfields Limited</title>
+    <meta name="description" content="Advanced AI-powered material procurement forecasting system for Western Coalfields Limited. Predict FY requirements for all consumables, optimize budgets, and prevent stockouts with intelligent seasonal planning.">
+    <meta name="keywords" content="WCL, Western Coalfields Limited, material forecasting, procurement planning, HDPE pipes, lubricants, electrical cables, bearings, welding electrodes, mining consumables, seasonal forecasting, budget planning">
+    <meta name="author" content="Western Coalfields Limited">
+    <meta name="robots" content="index, follow">
+    <meta name="language" content="English">
+    
+    <!-- Open Graph Meta Tags -->
+    <meta property="og:title" content="WCL Material Procurement Forecasting System">
+    <meta property="og:description" content="Intelligent material forecasting for mining operations. Predict demand for all consumables, optimize budgets, and ensure timely availability of critical materials.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://wcl-forecasting.com">
+    <meta property="og:image" content="{{ url_for('static', filename='favicon.svg') }}">
+    <meta property="og:site_name" content="WCL Material Forecasting">
+    
+    <!-- Twitter Card Meta Tags -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="WCL Material Procurement Forecasting">
+    <meta name="twitter:description" content="AI-powered forecasting system for all mining consumables procurement and budget planning.">
+    <meta name="twitter:image" content="{{ url_for('static', filename='favicon.svg') }}">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.svg') }}">
+    
+    <!-- Preconnect for Performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+    
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "WCL Material Procurement Forecasting System",
+      "description": "Advanced material forecasting system for Western Coalfields Limited to predict procurement needs and optimize budgets",
+      "url": "https://wcl-forecasting.com",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web Browser",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "INR"
+      },
+      "creator": {
+        "@type": "Organization",
+        "name": "Western Coalfields Limited",
+        "url": "https://westerncoal.nic.in"
+      },
+      "featureList": [
+        "HDPE pipes monsoon forecasting",
+        "Lubricants & oils continuous supply",
+        "Electrical cables safety planning",
+        "Bearings & belts maintenance scheduling",
+        "Welding materials project planning",
+        "All WCL consumables forecasting"
+      ]
+    }
+    </script>
+</head>
+<body itemscope itemtype="https://schema.org/WebPage">
+    <div class="container">
+        <header>
+            <h1 itemprop="name">WCL Material Procurement Forecasting</h1>
+            <p itemprop="description">Western Coalfields Limited - Annual FY Budget Planning System</p>
+        </header>
+
+        <div class="workflow-section">
+            <h2>Workflow Summary</h2>
+            <div class="workflow-steps">
+                <div class="step active" id="step1">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Data Upload</h3>
+                        <p>Upload past consumption and order data</p>
+                    </div>
+                </div>
+                <div class="step" id="step2">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Processing</h3>
+                        <p>App validates and stores the data</p>
+                    </div>
+                </div>
+                <div class="step" id="step3">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Forecasting</h3>
+                        <p>FY-wise procurement prediction generated</p>
+                    </div>
+                </div>
+                <div class="step" id="step4">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h3>Reporting</h3>
+                        <p>Access forecasts and reports</p>
+                    </div>
+                </div>
+                <div class="step" id="step5">
+                    <div class="step-number">5</div>
+                    <div class="step-content">
+                        <h3>Seasonal Planning</h3>
+                        <p>Special alerts for seasonal material needs</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="upload-section">
+            <div class="upload-box" id="uploadBox">
+                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden>
+                <div class="upload-content">
+                    <div class="upload-icon">📈</div>
+                    <p>Upload Historical Material Data</p>
+                    <small>Supports: Excel (.xlsx, .xls) and CSV files</small>
+                    <small>Required: date, consumption, stock, pending_orders, material_name (optional)</small>
+                    <small>Supported: HDPE Pipes, Lubricants, Electrical Cables, Bearings, Welding Materials, etc.</small>
+                </div>
+            </div>
+            <div class="config-section">
+                <div class="input-group">
+                    <label for="unitCost">Unit Cost (₹):</label>
+                    <input type="number" id="unitCost" value="1000" min="1" step="0.01">
+                </div>
+                <div class="input-group">
+                    <label for="modelType">Forecasting Model:</label>
+                    <select id="modelType">
+                        <option value="prophet">Prophet (Recommended)</option>
+                        <option value="arima">ARIMA</option>
+                        <option value="linear">Linear Regression</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <a href="/download-sample" class="sample-download-btn">📥 Download Sample CSV</a>
+                </div>
+            </div>
+            <button id="uploadBtn" class="btn-primary" disabled>Generate FY Forecast & Budget</button>
+        </div>
+
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Processing your data...</p>
+        </div>
+
+        <div class="results" id="results" style="display: none;">
+            <div class="accuracy-section">
+                <h2>Forecast Accuracy</h2>
+                <div id="accuracyCard"></div>
+            </div>
+            
+            <div class="alerts-section" id="alertsSection"></div>
+            
+            <div class="recommendations-section">
+                <h2>FY Procurement Recommendations</h2>
+                <div id="recommendationsContainer"></div>
+            </div>
+            
+            <div class="budget-overview">
+                <h2>FY Budget Overview</h2>
+                <div id="budgetCards"></div>
+            </div>
+            
+            <div class="chart-container">
+                <h2>Historical Data & 12-Month FY Forecast</h2>
+                <canvas id="forecastChart"></canvas>
+            </div>
+            
+            <div class="forecast-summary">
+                <h2>Monthly Procurement Plan</h2>
+                <div id="forecastTable"></div>
+            </div>
+            
+            <div class="stock-analysis">
+                <h2>Current Stock Analysis</h2>
+                <div id="stockAnalysis"></div>
+            </div>
+            
+            <div class="reports-section">
+                <h2>Download Reports</h2>
+                <div class="report-buttons">
+                    <button id="downloadExcel" class="btn-secondary">📄 Download Excel Report</button>
+                    <button id="downloadPDF" class="btn-secondary">📄 Download PDF Report</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="error" id="error" style="display: none;">
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>This website is Designed and Developed by <strong>Pratik Bihari</strong></p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

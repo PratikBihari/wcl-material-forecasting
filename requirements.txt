@@ -1,0 +1,9 @@
+Flask
+pandas
+numpy
+scikit-learn
+statsmodels
+prophet
+openpyxl
+reportlab
+matplotlib

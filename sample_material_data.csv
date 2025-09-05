@@ -1,0 +1,25 @@
+date,consumption,stock,pending_orders,material_name,unit
+2022-04-01,120,500,200,HDPE Pipes,meters
+2022-05-01,180,480,150,HDPE Pipes,meters
+2022-06-01,220,460,100,HDPE Pipes,meters
+2022-07-01,150,310,250,HDPE Pipes,meters
+2022-08-01,130,180,300,HDPE Pipes,meters
+2022-09-01,140,40,200,HDPE Pipes,meters
+2022-10-01,160,200,150,HDPE Pipes,meters
+2022-11-01,170,360,100,HDPE Pipes,meters
+2022-12-01,180,540,50,HDPE Pipes,meters
+2023-01-01,140,400,200,HDPE Pipes,meters
+2023-02-01,130,270,250,HDPE Pipes,meters
+2023-03-01,150,120,300,HDPE Pipes,meters
+2023-04-01,125,245,180,HDPE Pipes,meters
+2023-05-01,190,425,120,HDPE Pipes,meters
+2023-06-01,240,605,80,HDPE Pipes,meters
+2023-07-01,160,445,220,HDPE Pipes,meters
+2023-08-01,135,310,280,HDPE Pipes,meters
+2023-09-01,145,165,180,HDPE Pipes,meters
+2023-10-01,165,365,120,HDPE Pipes,meters
+2023-11-01,175,535,80,HDPE Pipes,meters
+2023-12-01,185,720,40,HDPE Pipes,meters
+2024-01-01,145,575,180,HDPE Pipes,meters
+2024-02-01,135,440,220,HDPE Pipes,meters
+2024-03-01,155,285,280,HDPE Pipes,meters
