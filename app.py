@@ -3,8 +3,7 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
-# from statsmodels.tsa.arima.model import ARIMA
-# from prophet import Prophet
+from statsmodels.tsa.arima.model import ARIMA
 from datetime import datetime, timedelta
 import json
 import os
@@ -262,12 +261,39 @@ class WCLMaterialForecaster:
                 return base_forecast * 0.9
     
     def arima_forecast(self, df, periods):
-        # Fallback to linear regression for now
-        return self.linear_forecast(df, periods)
+        try:
+            # Prepare time series data
+            ts_data = df['consumption'].values
+            
+            # Fit ARIMA model (1,1,1) - simple but effective
+            model = ARIMA(ts_data, order=(1, 1, 1))
+            fitted_model = model.fit()
+            
+            # Generate forecasts
+            forecast_result = fitted_model.forecast(steps=periods)
+            
+            # Generate future dates
+            last_date = pd.to_datetime(df['date'].iloc[-1])
+            dates = [(last_date + pd.DateOffset(months=i+1)).strftime('%Y-%m-%d') for i in range(periods)]
+            
+            # Apply material seasonality to ARIMA forecasts
+            material_name = df.get('material_name', pd.Series(['Material'])).iloc[0] if 'material_name' in df.columns else 'Material'
+            forecasts = []
+            
+            for i, forecast in enumerate(forecast_result):
+                future_date = last_date + pd.DateOffset(months=i+1)
+                adjusted_forecast = self.apply_material_seasonality(forecast, future_date.month, material_name, ts_data.mean())
+                forecasts.append(max(0, adjusted_forecast))
+            
+            return forecasts, dates
+            
+        except Exception as e:
+            # Fallback to enhanced linear forecast
+            return self.linear_forecast(df, periods)
     
     def prophet_forecast(self, df, periods):
-        # Fallback to linear regression for now
-        return self.linear_forecast(df, periods)
+        # Use enhanced ARIMA as Prophet alternative
+        return self.arima_forecast(df, periods)
     
     def calculate_forecast_accuracy(self, df, model_type='linear'):
         """Calculate forecast accuracy using cross-validation on historical data"""
