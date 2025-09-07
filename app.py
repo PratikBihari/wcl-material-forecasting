@@ -123,69 +123,77 @@ class WCLMaterialForecaster:
     def linear_forecast(self, df, periods):
         try:
             last_date = pd.to_datetime(df['date'].iloc[-1])
+            consumption_values = df['consumption'].values
+            
+            # Calculate robust statistics
+            consumption_mean = np.mean(consumption_values)
+            consumption_median = np.median(consumption_values)
+            consumption_std = np.std(consumption_values)
+            
+            # Use median as base for more stable forecasts
+            base_forecast = consumption_median
+            
+            # Calculate trend using linear regression on recent data
+            recent_months = min(12, len(consumption_values))
+            recent_data = consumption_values[-recent_months:]
+            x = np.arange(len(recent_data))
+            
+            if len(recent_data) >= 3:
+                # Fit linear trend
+                trend_coef = np.polyfit(x, recent_data, 1)[0]
+                # Limit trend to reasonable bounds
+                trend_coef = np.clip(trend_coef, -consumption_mean*0.05, consumption_mean*0.05)
+            else:
+                trend_coef = 0
+            
+            # Build seasonal pattern from historical data
+            seasonal_factors = {}
+            for i, row in df.iterrows():
+                month = pd.to_datetime(row['date']).month
+                if month not in seasonal_factors:
+                    seasonal_factors[month] = []
+                seasonal_factors[month].append(row['consumption'])
+            
+            # Calculate seasonal multipliers
+            monthly_multipliers = {}
+            for month in range(1, 13):
+                if month in seasonal_factors and len(seasonal_factors[month]) > 0:
+                    month_avg = np.mean(seasonal_factors[month])
+                    monthly_multipliers[month] = month_avg / consumption_mean
+                else:
+                    monthly_multipliers[month] = 1.0
+            
+            # Smooth seasonal factors to avoid extreme variations
+            for month in monthly_multipliers:
+                monthly_multipliers[month] = np.clip(monthly_multipliers[month], 0.7, 1.4)
+            
+            # Generate forecasts
             forecasts = []
             dates = []
-            
-            # Get historical statistics
-            consumption_values = df['consumption'].values
-            consumption_mean = consumption_values.mean()
-            consumption_std = consumption_values.std()
-            
-            # Calculate trend from recent data
-            recent_data = df['consumption'].tail(6).values
-            if len(recent_data) >= 2:
-                trend = (recent_data[-1] - recent_data[0]) / len(recent_data)
-            else:
-                trend = 0
-            
-            # Generate seasonal pattern based on historical data
-            monthly_patterns = {}
-            for _, row in df.iterrows():
-                month = pd.to_datetime(row['date']).month
-                if month not in monthly_patterns:
-                    monthly_patterns[month] = []
-                monthly_patterns[month].append(row['consumption'])
-            
-            # Calculate average consumption for each month
-            monthly_avg = {}
-            for month, values in monthly_patterns.items():
-                monthly_avg[month] = np.mean(values)
-            
-            # If no seasonal pattern, use overall average
-            if not monthly_avg:
-                for month in range(1, 13):
-                    monthly_avg[month] = consumption_mean
-            
-            # Generate forecasts with seasonal variation
-            base_forecast = consumption_mean
             
             for i in range(periods):
                 future_date = last_date + pd.DateOffset(months=i+1)
                 future_month = future_date.month
                 
+                # Base forecast with trend
+                forecast = base_forecast + (trend_coef * (i + 1))
+                
                 # Apply seasonal pattern
-                if future_month in monthly_avg:
-                    seasonal_factor = monthly_avg[future_month] / consumption_mean
-                else:
-                    seasonal_factor = 1.0
+                seasonal_multiplier = monthly_multipliers.get(future_month, 1.0)
+                forecast *= seasonal_multiplier
                 
-                # Apply trend
-                trend_component = trend * (i + 1)
+                # Apply material-specific adjustments
+                material_name = df['material_name'].iloc[0] if 'material_name' in df.columns else 'Material'
+                forecast = self.apply_material_seasonality(forecast, future_month, material_name)
                 
-                # Add some realistic variation (5-15% of mean)
-                variation = np.random.normal(0, consumption_std * 0.1)
+                # Add controlled variation (±3% of mean)
+                variation = np.random.normal(0, consumption_mean * 0.03)
+                forecast += variation
                 
-                # Calculate forecast
-                forecast = base_forecast * seasonal_factor + trend_component + variation
-                
-                # Apply material-specific seasonal adjustments
-                material_name = df.get('material_name', pd.Series(['Material'])).iloc[0] if 'material_name' in df.columns else 'Material'
-                forecast = self.apply_material_seasonality(forecast, future_month, material_name, consumption_mean)
-                
-                # Ensure reasonable bounds
-                min_forecast = consumption_mean * 0.3  # At least 30% of average
-                max_forecast = consumption_mean * 2.5  # At most 250% of average
-                forecast = max(min_forecast, min(forecast, max_forecast))
+                # Ensure reasonable bounds (tighter bounds for more realistic forecasts)
+                min_bound = consumption_mean * 0.5
+                max_bound = consumption_mean * 1.8
+                forecast = np.clip(forecast, min_bound, max_bound)
                 
                 forecasts.append(forecast)
                 dates.append(future_date.strftime('%Y-%m-%d'))
@@ -193,102 +201,132 @@ class WCLMaterialForecaster:
             return forecasts, dates
             
         except Exception as e:
-            # Enhanced fallback with seasonal variation
-            avg_consumption = df['consumption'].mean()
-            std_consumption = df['consumption'].std()
-            last_date = pd.to_datetime(df['date'].iloc[-1])
-            
-            forecasts = []
-            dates = []
-            
-            for i in range(periods):
-                future_date = last_date + pd.DateOffset(months=i+1)
-                
-                # Add seasonal variation even in fallback
-                seasonal_multiplier = 1 + 0.2 * np.sin(2 * np.pi * future_date.month / 12)
-                variation = np.random.normal(0, std_consumption * 0.1)
-                
-                forecast = avg_consumption * seasonal_multiplier + variation
-                forecast = max(avg_consumption * 0.5, min(forecast, avg_consumption * 1.8))
-                
-                forecasts.append(forecast)
-                dates.append(future_date.strftime('%Y-%m-%d'))
-            
-            return forecasts, dates
+            # Robust fallback
+            return self._fallback_forecast(df, periods)
     
-    def apply_material_seasonality(self, base_forecast, month, material_name, avg_consumption):
+    def _fallback_forecast(self, df, periods):
+        """Fallback forecast method with basic seasonal pattern"""
+        avg_consumption = df['consumption'].mean()
+        last_date = pd.to_datetime(df['date'].iloc[-1])
+        
+        forecasts = []
+        dates = []
+        
+        for i in range(periods):
+            future_date = last_date + pd.DateOffset(months=i+1)
+            
+            # Simple seasonal pattern
+            seasonal_factor = 1 + 0.15 * np.sin(2 * np.pi * (future_date.month - 1) / 12)
+            forecast = avg_consumption * seasonal_factor
+            
+            # Add small variation
+            variation = np.random.normal(0, avg_consumption * 0.03)
+            forecast += variation
+            
+            forecasts.append(max(avg_consumption * 0.5, forecast))
+            dates.append(future_date.strftime('%Y-%m-%d'))
+        
+        return forecasts, dates
+    
+    def apply_material_seasonality(self, base_forecast, month, material_name):
         """Apply material-specific seasonal adjustments"""
         material_lower = material_name.lower()
         
         # HDPE Pipes - Higher demand before monsoon (Apr-Jun)
         if 'hdpe' in material_lower or 'pipe' in material_lower:
             if month in [4, 5, 6]:  # Pre-monsoon
-                return base_forecast * 1.4
+                return base_forecast * 1.25
             elif month in [7, 8, 9]:  # Monsoon
-                return base_forecast * 0.7
+                return base_forecast * 0.85
             else:
                 return base_forecast
         
         # Lubricants - Higher during peak mining (Oct-Mar)
         elif 'lubricant' in material_lower or 'oil' in material_lower:
             if month in [10, 11, 12, 1, 2, 3]:  # Peak mining
-                return base_forecast * 1.3
+                return base_forecast * 1.15
             else:
-                return base_forecast * 0.8
+                return base_forecast * 0.95
         
         # Electrical - Higher during monsoon for safety
         elif 'electrical' in material_lower or 'cable' in material_lower:
             if month in [6, 7, 8, 9]:  # Monsoon safety
-                return base_forecast * 1.2
+                return base_forecast * 1.1
             else:
                 return base_forecast
         
         # Maintenance items - Higher in winter
         elif any(item in material_lower for item in ['bearing', 'belt', 'hydraulic']):
             if month in [11, 12, 1, 2]:  # Winter maintenance
-                return base_forecast * 1.25
-            else:
-                return base_forecast * 0.9
-        
-        # Default seasonal pattern
-        else:
-            # General mining seasonal pattern
-            if month in [4, 5, 6]:  # Pre-monsoon preparation
                 return base_forecast * 1.15
-            elif month in [10, 11, 12, 1, 2, 3]:  # Peak mining
-                return base_forecast * 1.1
             else:
-                return base_forecast * 0.9
+                return base_forecast * 0.98
+        
+        # Default pattern
+        else:
+            if month in [4, 5, 6]:  # Pre-monsoon preparation
+                return base_forecast * 1.08
+            elif month in [10, 11, 12, 1, 2, 3]:  # Peak mining
+                return base_forecast * 1.03
+            else:
+                return base_forecast * 0.98
     
     def arima_forecast(self, df, periods):
         try:
-            # Prepare time series data
             ts_data = df['consumption'].values
             
-            # Fit ARIMA model (1,1,1) - simple but effective
-            model = ARIMA(ts_data, order=(1, 1, 1))
-            fitted_model = model.fit()
+            # Check for sufficient data
+            if len(ts_data) < 10:
+                return self.linear_forecast(df, periods)
             
-            # Generate forecasts
-            forecast_result = fitted_model.forecast(steps=periods)
+            # Try different ARIMA orders for best fit
+            best_aic = float('inf')
+            best_model = None
             
-            # Generate future dates
+            # Test multiple ARIMA configurations
+            orders_to_try = [(1,1,1), (2,1,1), (1,1,2), (0,1,1), (1,0,1)]
+            
+            for order in orders_to_try:
+                try:
+                    model = ARIMA(ts_data, order=order)
+                    fitted = model.fit()
+                    if fitted.aic < best_aic:
+                        best_aic = fitted.aic
+                        best_model = fitted
+                except:
+                    continue
+            
+            if best_model is None:
+                return self.linear_forecast(df, periods)
+            
+            # Generate base forecasts
+            forecast_result = best_model.forecast(steps=periods)
+            
+            # Generate dates
             last_date = pd.to_datetime(df['date'].iloc[-1])
             dates = [(last_date + pd.DateOffset(months=i+1)).strftime('%Y-%m-%d') for i in range(periods)]
             
-            # Apply material seasonality to ARIMA forecasts
-            material_name = df.get('material_name', pd.Series(['Material'])).iloc[0] if 'material_name' in df.columns else 'Material'
+            # Apply seasonal adjustments and material intelligence
+            material_name = df['material_name'].iloc[0] if 'material_name' in df.columns else 'Material'
             forecasts = []
             
-            for i, forecast in enumerate(forecast_result):
+            for i, base_forecast in enumerate(forecast_result):
                 future_date = last_date + pd.DateOffset(months=i+1)
-                adjusted_forecast = self.apply_material_seasonality(forecast, future_date.month, material_name, ts_data.mean())
-                forecasts.append(max(0, adjusted_forecast))
+                
+                # Apply material seasonality
+                adjusted_forecast = self.apply_material_seasonality(base_forecast, future_date.month, material_name)
+                
+                # Ensure positive and reasonable bounds
+                mean_consumption = ts_data.mean()
+                min_bound = mean_consumption * 0.5
+                max_bound = mean_consumption * 1.8
+                
+                final_forecast = np.clip(adjusted_forecast, min_bound, max_bound)
+                forecasts.append(final_forecast)
             
             return forecasts, dates
             
         except Exception as e:
-            # Fallback to enhanced linear forecast
             return self.linear_forecast(df, periods)
     
     def prophet_forecast(self, df, periods):
@@ -306,10 +344,12 @@ class WCLMaterialForecaster:
         test_df = df.iloc[train_size:].copy()
         
         try:
-            # Generate forecasts for test period
-            if model_type == 'linear':
-                test_forecasts, _ = self.linear_forecast(train_df, len(test_df))
-            else:
+            # Generate forecasts for test period using the specified model
+            if model_type == 'arima':
+                test_forecasts, _ = self.arima_forecast(train_df, len(test_df))
+            elif model_type == 'prophet':
+                test_forecasts, _ = self.prophet_forecast(train_df, len(test_df))
+            else:  # linear
                 test_forecasts, _ = self.linear_forecast(train_df, len(test_df))
             
             # Calculate accuracy metrics
@@ -751,66 +791,468 @@ def generate_excel_report(data):
     
     try:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Summary sheet
             material_name = data.get('material_info', {}).get('name', 'Material')
-            summary_df = pd.DataFrame({
-                'Metric': ['Material', 'Total Forecast', 'Budget', 'Model'],
-                'Value': [material_name, f"{data['budget']['total_forecast']:.0f} units", 
-                         f"₹{data['budget']['total_budget']:,.0f}", data.get('model_type', 'Linear')]
-            })
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            unit = data.get('material_info', {}).get('unit', 'units')
             
-            # Forecast sheet
-            forecast_df = pd.DataFrame({
-                'Month': data['forecast']['dates'],
-                'Forecast': data['forecast']['forecasts'],
-                'Cost': [f * data['budget']['unit_cost'] for f in data['forecast']['forecasts']]
+            # 1. Executive Summary Sheet
+            summary_data = {
+                'Metric': [
+                    'Material Name', 'Unit of Measurement', 'Data Points', 'Date Range',
+                    'Forecasting Model', 'Model Accuracy', 'Total FY Forecast', 
+                    'Monthly Average', 'Safety Buffer', 'Total FY Budget', 'Unit Cost'
+                ],
+                'Value': [
+                    material_name, unit, data['material_info']['data_points'], 
+                    data['material_info']['date_range'], data.get('model_type', 'Prophet'),
+                    f"{data['accuracy']['percentage']}% ({data['accuracy']['status']})",
+                    f"{data['budget']['total_forecast']:.0f} {unit}",
+                    f"{data['budget']['monthly_average']:.0f} {unit}",
+                    f"{data['budget']['safety_buffer']:.0f} {unit}",
+                    f"₹{data['budget']['total_budget']:,.0f}",
+                    f"₹{data['budget']['unit_cost']:,.0f}"
+                ]
+            }
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Executive Summary', index=False)
+            
+            # 2. Historical Data Sheet
+            historical_df = pd.DataFrame({
+                'Date': data['historical']['dates'],
+                f'Consumption ({unit})': data['historical']['consumption'],
+                f'Stock ({unit})': data['historical']['stock'],
+                f'Pending Orders ({unit})': data['historical']['pending_orders']
             })
-            forecast_df.to_excel(writer, sheet_name='Forecast', index=False)
+            historical_df.to_excel(writer, sheet_name='Historical Data', index=False)
+            
+            # 3. 12-Month Forecast Sheet
+            forecast_df = pd.DataFrame({
+                'Month': [pd.to_datetime(d).strftime('%b %Y') for d in data['forecast']['dates']],
+                'Date': data['forecast']['dates'],
+                f'Forecast ({unit})': [round(f, 1) for f in data['forecast']['forecasts']],
+                'Unit Cost (₹)': [data['budget']['unit_cost']] * len(data['forecast']['forecasts']),
+                'Monthly Cost (₹)': [round(f * data['budget']['unit_cost'], 0) for f in data['forecast']['forecasts']],
+                'Quarter': [f"Q{((pd.to_datetime(d).month-1)//3)+1}" for d in data['forecast']['dates']],
+                'Season': [get_season_name(pd.to_datetime(d).month) for d in data['forecast']['dates']]
+            })
+            forecast_df.to_excel(writer, sheet_name='12-Month Forecast', index=False)
+            
+            # 3.1. Monthly Procurement Plan Sheet
+            procurement_plan = []
+            for i, (date, forecast) in enumerate(zip(data['forecast']['dates'], data['forecast']['forecasts'])):
+                month_date = pd.to_datetime(date)
+                procurement_qty = forecast * 1.1  # 10% buffer
+                procurement_cost = procurement_qty * data['budget']['unit_cost']
+                
+                # Determine lead time and order date
+                if 'hdpe' in material_name.lower() or 'pipe' in material_name.lower():
+                    lead_days = 45
+                else:
+                    lead_days = 30
+                
+                order_by_date = (month_date - pd.DateOffset(days=lead_days)).strftime('%Y-%m-%d')
+                delivery_date = month_date.strftime('%Y-%m-%d')
+                
+                priority = "HIGH" if month_date.month in [4,5,6] else "MEDIUM" if month_date.month in [10,11,12,1,2,3] else "NORMAL"
+                
+                procurement_plan.append({
+                    'Month': month_date.strftime('%b %Y'),
+                    'Procurement Qty': round(procurement_qty, 1),
+                    'Procurement Cost': round(procurement_cost, 0),
+                    'Lead Time (Days)': lead_days,
+                    'Order By Date': order_by_date,
+                    'Delivery Target': delivery_date,
+                    'Priority': priority,
+                    'Vendor Selection': 'As per approved vendor list',
+                    'Quality Check': 'Mandatory upon delivery'
+                })
+            
+            pd.DataFrame(procurement_plan).to_excel(writer, sheet_name='Monthly Procurement Plan', index=False)
+            
+            # 4. Quarterly Analysis Sheet
+            quarterly_data = []
+            for i in range(0, len(data['forecast']['forecasts']), 3):
+                quarter_forecasts = data['forecast']['forecasts'][i:i+3]
+                quarter_dates = data['forecast']['dates'][i:i+3]
+                quarter_total = sum(quarter_forecasts)
+                quarter_cost = quarter_total * data['budget']['unit_cost']
+                quarterly_data.append({
+                    'Quarter': f"Q{(i//3)+1}",
+                    'Months': ', '.join([pd.to_datetime(d).strftime('%b') for d in quarter_dates[:len(quarter_forecasts)]]),
+                    f'Total Forecast ({unit})': round(quarter_total, 1),
+                    'Total Cost (₹)': round(quarter_cost, 0),
+                    'Average Monthly': round(quarter_total/len(quarter_forecasts), 1)
+                })
+            pd.DataFrame(quarterly_data).to_excel(writer, sheet_name='Quarterly Analysis', index=False)
+            
+            # 5. Alerts & Recommendations Sheet
+            alerts_data = []
+            for alert in data.get('alerts', []):
+                alerts_data.append({
+                    'Type': alert.get('type', 'General').title(),
+                    'Message': alert.get('message', '')
+                })
+            
+            recommendations_data = []
+            for rec in data.get('recommendations', []):
+                recommendations_data.append({
+                    'Priority': rec.get('priority', 'Medium').upper(),
+                    'Title': rec.get('title', ''),
+                    'Recommendation': rec.get('message', '')
+                })
+            
+            if alerts_data:
+                pd.DataFrame(alerts_data).to_excel(writer, sheet_name='Alerts', index=False)
+            if recommendations_data:
+                pd.DataFrame(recommendations_data).to_excel(writer, sheet_name='Recommendations', index=False)
+            
+            # 6. Enhanced Stock Analysis Sheet
+            if 'stock_analysis' in data:
+                current_stock = data['stock_analysis']['current_stock']
+                avg_consumption = data['stock_analysis']['avg_monthly_consumption']
+                months_remaining = data['stock_analysis']['months_remaining']
+                
+                # Calculate additional metrics
+                safety_stock = avg_consumption * 1.5
+                reorder_level = avg_consumption * 2.5
+                max_stock_level = avg_consumption * 6
+                
+                stock_analysis_data = {
+                    'Stock Metric': [
+                        'Current Stock Level', 'Average Monthly Consumption', 'Months of Stock Remaining',
+                        'Safety Stock Level', 'Reorder Point', 'Maximum Stock Level', 'Stock Turnover Rate',
+                        'Stock Status', 'Action Required', 'Next Review Date'
+                    ],
+                    'Current Value': [
+                        f"{current_stock:.0f} {unit}",
+                        f"{avg_consumption:.1f} {unit}",
+                        f"{months_remaining:.1f} months",
+                        f"{safety_stock:.0f} {unit}",
+                        f"{reorder_level:.0f} {unit}",
+                        f"{max_stock_level:.0f} {unit}",
+                        f"{12/months_remaining:.1f} times/year" if months_remaining > 0 else "N/A",
+                        'Critical' if months_remaining < 2 else 'Warning' if months_remaining < 3 else 'Normal',
+                        'Emergency procurement' if months_remaining < 1.5 else 'Plan procurement' if months_remaining < 3 else 'Monitor',
+                        (pd.Timestamp.now() + pd.DateOffset(weeks=1)).strftime('%Y-%m-%d')
+                    ],
+                    'Recommended Level': [
+                        f"{max_stock_level:.0f} {unit} (Max)",
+                        f"{avg_consumption:.1f} {unit} (Baseline)",
+                        "3-6 months (Optimal)",
+                        f"{safety_stock:.0f} {unit} (Minimum)",
+                        f"{reorder_level:.0f} {unit} (Trigger)",
+                        f"{max_stock_level:.0f} {unit} (Maximum)",
+                        "4-6 times/year (Optimal)",
+                        "Normal (3+ months stock)",
+                        "Proactive monitoring",
+                        "Weekly review recommended"
+                    ]
+                }
+                pd.DataFrame(stock_analysis_data).to_excel(writer, sheet_name='Current Stock Analysis', index=False)
+            
+            # 7. FY Procurement Recommendations Sheet
+            recommendations_data = []
+            
+            # Strategic recommendations
+            recommendations_data.extend([
+                {'Category': 'Strategic', 'Priority': 'HIGH', 'Recommendation': f'Total FY procurement: {data["budget"]["total_forecast"]:.0f} {unit} + {data["budget"]["safety_buffer"]:.0f} {unit} safety buffer'},
+                {'Category': 'Strategic', 'Priority': 'HIGH', 'Recommendation': f'FY Budget allocation: ₹{data["budget"]["total_budget"]:,.0f}'},
+                {'Category': 'Strategic', 'Priority': 'MEDIUM', 'Recommendation': 'Split procurement into 4 quarterly orders for better cash flow'},
+                {'Category': 'Seasonal', 'Priority': 'HIGH', 'Recommendation': 'Pre-monsoon procurement (Apr-Jun): Ensure 3-month stock'},
+                {'Category': 'Seasonal', 'Priority': 'MEDIUM', 'Recommendation': 'Peak mining season (Oct-Mar): Maintain continuous supply'},
+                {'Category': 'Quality', 'Priority': 'HIGH', 'Recommendation': f'All {material_name} must meet WCL technical specifications'},
+                {'Category': 'Vendor', 'Priority': 'MEDIUM', 'Recommendation': 'Maintain 2-3 approved vendors for supply security'},
+                {'Category': 'Inventory', 'Priority': 'MEDIUM', 'Recommendation': f'Optimal stock range: {safety_stock:.0f}-{max_stock_level:.0f} {unit}'},
+                {'Category': 'Risk', 'Priority': 'HIGH', 'Recommendation': f'Emergency stock: {safety_stock*2:.0f} {unit} for critical operations'},
+                {'Category': 'Compliance', 'Priority': 'HIGH', 'Recommendation': 'Maintain quality certificates and conduct vendor audits'}
+            ])
+            
+            pd.DataFrame(recommendations_data).to_excel(writer, sheet_name='FY Procurement Recommendations', index=False)
         
         output.seek(0)
-        return send_file(output, as_attachment=True, download_name='WCL_Report.xlsx', 
+        return send_file(output, as_attachment=True, download_name=f'WCL_{material_name.replace(" ", "_")}_Forecast_Report.xlsx', 
                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     except Exception as e:
         return jsonify({'error': f'Excel generation failed: {str(e)}'}), 500
 
 def generate_pdf_report(data):
     try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from datetime import datetime
         
         buffer = io.BytesIO()
-        p = canvas.Canvas(buffer, pagesize=letter)
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
         
-        # Title
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=20, spaceAfter=20, textColor=colors.darkblue, alignment=1)
+        heading_style = ParagraphStyle('Heading', parent=styles['Heading2'], fontSize=14, spaceAfter=10, textColor=colors.darkgreen)
+        subheading_style = ParagraphStyle('SubHeading', parent=styles['Heading3'], fontSize=12, spaceAfter=8, textColor=colors.darkred)
+        
+        story = []
         material_name = data.get('material_info', {}).get('name', 'Material')
-        p.setFont("Helvetica-Bold", 16)
-        p.drawString(100, 750, f"WCL {material_name} Forecast Report")
+        unit = data.get('material_info', {}).get('unit', 'units')
         
-        # Summary
-        p.setFont("Helvetica", 12)
-        y = 700
-        p.drawString(100, y, f"Total Forecast: {data['budget']['total_forecast']:.0f} units")
-        y -= 20
-        p.drawString(100, y, f"Total Budget: ₹{data['budget']['total_budget']:,.0f}")
-        y -= 20
-        p.drawString(100, y, f"Model: {data.get('model_type', 'Linear')}")
+        # TITLE PAGE
+        story.append(Paragraph(f"WCL {material_name} Comprehensive Forecast Report", title_style))
+        story.append(Paragraph("Western Coalfields Limited", ParagraphStyle('Center', parent=styles['Normal'], alignment=1, fontSize=14)))
+        story.append(Paragraph("Material Management Department", ParagraphStyle('Center', parent=styles['Normal'], alignment=1, fontSize=12)))
+        story.append(Paragraph(f"Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}", ParagraphStyle('Center', parent=styles['Normal'], alignment=1, fontSize=10)))
+        story.append(Spacer(1, 30))
         
-        # Monthly forecast
-        y -= 40
-        p.setFont("Helvetica-Bold", 14)
-        p.drawString(100, y, "Monthly Forecast:")
-        y -= 20
+        # EXECUTIVE SUMMARY
+        story.append(Paragraph("Executive Summary", heading_style))
+        summary_data = [
+            ['Metric', 'Value'],
+            ['Material Name', material_name],
+            ['Unit of Measurement', unit],
+            ['Forecasting Model', f"{data.get('model_type', 'Prophet').upper()}"],
+            ['Model Accuracy', f"{data['accuracy']['percentage']}% ({data['accuracy']['status']})"],
+            ['Historical Data Points', str(data['material_info']['data_points'])],
+            ['Data Date Range', data['material_info']['date_range']],
+            ['Total FY Forecast', f"{data['budget']['total_forecast']:.0f} {unit}"],
+            ['Monthly Average', f"{data['budget']['monthly_average']:.0f} {unit}"],
+            ['Safety Buffer (15%)', f"{data['budget']['safety_buffer']:.0f} {unit}"],
+            ['Unit Cost', f"₹{data['budget']['unit_cost']:,.0f}"],
+            ['Total FY Budget', f"₹{data['budget']['total_budget']:,.0f}"]
+        ]
         
-        p.setFont("Helvetica", 10)
-        for i, (date, forecast) in enumerate(zip(data['forecast']['dates'][:6], data['forecast']['forecasts'][:6])):
-            month = pd.to_datetime(date).strftime('%b %Y')
-            p.drawString(100, y, f"{month}: {forecast:.0f} units")
-            y -= 15
+        summary_table = Table(summary_data, colWidths=[2.5*inch, 3*inch])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.lightblue),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10)
+        ]))
+        story.append(summary_table)
+        story.append(PageBreak())
         
-        p.save()
+        # HISTORICAL DATA & FORECAST CHART
+        story.append(Paragraph("Historical Data & 12-Month FY Forecast Graph", heading_style))
+        try:
+            chart_buffer = generate_forecast_chart(data)
+            if chart_buffer:
+                chart_image = Image(chart_buffer, width=7*inch, height=4.5*inch)
+                story.append(chart_image)
+            else:
+                story.append(Paragraph("Chart could not be generated", styles['Normal']))
+        except:
+            story.append(Paragraph("Chart generation unavailable", styles['Normal']))
+        story.append(Spacer(1, 20))
+        
+        # COMPLETE HISTORICAL DATA
+        story.append(Paragraph("Complete Historical Data", heading_style))
+        hist_data = [['Date', f'Consumption ({unit})', f'Stock ({unit})', f'Pending Orders ({unit})']]
+        for i, date in enumerate(data['historical']['dates']):
+            hist_data.append([
+                pd.to_datetime(date).strftime('%b %Y'),
+                f"{data['historical']['consumption'][i]:.0f}",
+                f"{data['historical']['stock'][i]:.0f}",
+                f"{data['historical']['pending_orders'][i]:.0f}"
+            ])
+        
+        hist_table = Table(hist_data, colWidths=[1.3*inch, 1.5*inch, 1.3*inch, 1.4*inch])
+        hist_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.lightgreen),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 9)
+        ]))
+        story.append(hist_table)
+        story.append(PageBreak())
+        
+        # COMPLETE 12-MONTH FY FORECAST
+        story.append(Paragraph("Complete 12-Month FY Forecast", heading_style))
+        forecast_data = [['Month', 'Date', f'Forecast ({unit})', 'Unit Cost (₹)', 'Monthly Cost (₹)', 'Quarter', 'Season']]
+        
+        total_cost = 0
+        for i, (date, forecast) in enumerate(zip(data['forecast']['dates'], data['forecast']['forecasts'])):
+            month_name = pd.to_datetime(date).strftime('%b %Y')
+            monthly_cost = forecast * data['budget']['unit_cost']
+            total_cost += monthly_cost
+            quarter = f"Q{((pd.to_datetime(date).month-1)//3)+1}"
+            season = get_season_name(pd.to_datetime(date).month)
+            
+            forecast_data.append([
+                month_name,
+                pd.to_datetime(date).strftime('%Y-%m-%d'),
+                f"{forecast:.0f}",
+                f"₹{data['budget']['unit_cost']:,.0f}",
+                f"₹{monthly_cost:,.0f}",
+                quarter,
+                season
+            ])
+        
+        forecast_data.append([
+            'TOTAL', '', 
+            f"{sum(data['forecast']['forecasts']):.0f}",
+            '', f"₹{total_cost:,.0f}", '', ''
+        ])
+        
+        forecast_table = Table(forecast_data, colWidths=[0.8*inch, 1*inch, 0.8*inch, 0.8*inch, 1*inch, 0.6*inch, 0.8*inch])
+        forecast_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('BACKGROUND', (0, 1), (-2, -1), colors.lightblue),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.yellow),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 8)
+        ]))
+        story.append(forecast_table)
+        story.append(PageBreak())
+        
+        # MONTHLY PROCUREMENT PLAN
+        story.append(Paragraph("Monthly Procurement Plan", heading_style))
+        procurement_data = [['Month', 'Procurement Qty', 'Procurement Cost', 'Lead Time', 'Order By Date', 'Delivery Target', 'Priority']]
+        
+        for i, (date, forecast) in enumerate(zip(data['forecast']['dates'], data['forecast']['forecasts'])):
+            month_date = pd.to_datetime(date)
+            procurement_qty = forecast * 1.1
+            procurement_cost = procurement_qty * data['budget']['unit_cost']
+            
+            if 'hdpe' in material_name.lower() or 'pipe' in material_name.lower():
+                lead_time = "45 days"
+                order_by = (month_date - pd.DateOffset(days=45)).strftime('%d-%b-%Y')
+            else:
+                lead_time = "30 days"
+                order_by = (month_date - pd.DateOffset(days=30)).strftime('%d-%b-%Y')
+            
+            priority = "HIGH" if month_date.month in [4,5,6] else "MEDIUM" if month_date.month in [10,11,12,1,2,3] else "NORMAL"
+            
+            procurement_data.append([
+                month_date.strftime('%b %Y'),
+                f"{procurement_qty:.0f} {unit}",
+                f"₹{procurement_cost:,.0f}",
+                lead_time,
+                order_by,
+                month_date.strftime('%d-%b-%Y'),
+                priority
+            ])
+        
+        procurement_table = Table(procurement_data, colWidths=[0.9*inch, 1*inch, 1*inch, 0.8*inch, 0.9*inch, 0.9*inch, 0.7*inch])
+        procurement_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.lightgreen),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 1), (-1, -1), 8)
+        ]))
+        story.append(procurement_table)
+        story.append(PageBreak())
+        
+        # CURRENT STOCK ANALYSIS
+        if 'stock_analysis' in data:
+            story.append(Paragraph("Current Stock Analysis", heading_style))
+            
+            current_stock = data['stock_analysis']['current_stock']
+            avg_consumption = data['stock_analysis']['avg_monthly_consumption']
+            months_remaining = data['stock_analysis']['months_remaining']
+            safety_stock = avg_consumption * 1.5
+            reorder_level = avg_consumption * 2.5
+            max_stock_level = avg_consumption * 6
+            
+            stock_status = "CRITICAL" if months_remaining < 2 else "WARNING" if months_remaining < 3 else "NORMAL"
+            
+            stock_data = [
+                ['Stock Metric', 'Current Value', 'Recommended Level', 'Status'],
+                ['Current Stock Level', f"{current_stock:.0f} {unit}", f"{max_stock_level:.0f} {unit} (Max)", stock_status],
+                ['Average Monthly Consumption', f"{avg_consumption:.1f} {unit}", f"{avg_consumption:.1f} {unit} (Baseline)", ''],
+                ['Months of Stock Remaining', f"{months_remaining:.1f} months", "3-6 months (Optimal)", ''],
+                ['Safety Stock Level', f"{safety_stock:.0f} {unit}", f"{safety_stock:.0f} {unit} (Required)", 'MAINTAIN' if current_stock >= safety_stock else 'BELOW SAFETY'],
+                ['Reorder Point', f"{reorder_level:.0f} {unit}", f"{reorder_level:.0f} {unit} (Trigger)", 'REORDER NOW' if current_stock <= reorder_level else 'NOT YET']
+            ]
+            
+            stock_table = Table(stock_data, colWidths=[2.2*inch, 1.8*inch, 1.8*inch, 1.5*inch])
+            stock_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.purple),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lavender),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('FONTSIZE', (0, 1), (-1, -1), 9)
+            ]))
+            story.append(stock_table)
+            story.append(PageBreak())
+        
+        # FY PROCUREMENT RECOMMENDATIONS
+        story.append(Paragraph("FY Procurement Recommendations", heading_style))
+        
+        rec_avg_consumption = data.get('stock_analysis', {}).get('avg_monthly_consumption', data['budget']['monthly_average'])
+        rec_safety_stock = rec_avg_consumption * 1.5
+        rec_max_stock_level = rec_avg_consumption * 6
+        
+        recommendations_text = f"""Strategic Procurement Recommendations:
+
+1. ANNUAL PROCUREMENT STRATEGY:
+   • Total FY Requirement: {data['budget']['total_forecast']:.0f} {unit} + {data['budget']['safety_buffer']:.0f} {unit} (safety buffer)
+   • Total FY Budget: ₹{data['budget']['total_budget']:,.0f}
+   • Recommended Procurement: Split into 4 quarterly orders
+
+2. SEASONAL PROCUREMENT PRIORITIES:
+   • PRE-MONSOON (Apr-Jun): Ensure 3-month stock before monsoon
+   • PEAK MINING (Oct-Mar): Maintain continuous supply
+   • MONSOON (Jul-Sep): Minimal procurement, focus on inventory
+
+3. VENDOR MANAGEMENT:
+   • Maintain 2-3 approved vendors for supply security
+   • Negotiate annual rate contracts for price stability
+   • Establish backup suppliers for emergency requirements
+
+4. QUALITY & COMPLIANCE:
+   • Ensure all {material_name} meets WCL technical specifications
+   • Maintain quality certificates and test reports
+   • Conduct regular vendor audits for quality assurance
+
+5. INVENTORY OPTIMIZATION:
+   • Maintain optimal stock levels: {rec_safety_stock:.0f}-{rec_max_stock_level:.0f} {unit}
+   • Implement FIFO inventory management
+   • Regular stock audits and reconciliation
+
+6. RISK MITIGATION:
+   • Maintain emergency stock of {rec_safety_stock*2:.0f} {unit}
+   • Plan procurement 2 months in advance of peak seasons
+   • Monitor monthly spending against approved FY budget"""
+        
+        story.append(Paragraph(recommendations_text, styles['Normal']))
+        story.append(Spacer(1, 20))
+        
+        # FOOTER
+        story.append(Paragraph("Report Summary", heading_style))
+        summary_text = f"This comprehensive report provides complete analysis for {material_name} procurement planning based on {data['material_info']['data_points']} historical data points with {data['accuracy']['percentage']}% forecast accuracy."
+        story.append(Paragraph(summary_text, styles['Normal']))
+        
+        story.append(Spacer(1, 20))
+        story.append(Paragraph("Generated by WCL Material Forecasting System", ParagraphStyle('Footer', parent=styles['Normal'], alignment=1, fontSize=10, textColor=colors.grey)))
+        story.append(Paragraph("Western Coalfields Limited - Material Management Department", ParagraphStyle('Footer', parent=styles['Normal'], alignment=1, fontSize=9, textColor=colors.grey)))
+        
+        doc.build(story)
         buffer.seek(0)
-        return send_file(buffer, as_attachment=True, download_name='WCL_Report.pdf', mimetype='application/pdf')
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'WCL_{material_name.replace(" ", "_")}_Complete_Report.pdf',
+            mimetype='application/pdf'
+        )
     except Exception as e:
         return jsonify({'error': f'PDF generation failed: {str(e)}'}), 500
 

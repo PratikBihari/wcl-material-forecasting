@@ -873,3 +873,40 @@ header p {
         font-size: 0.9em;
     }
 }
+.report-info {
+    background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.report-info p {
+    margin: 0 0 15px 0;
+    font-weight: 600;
+    color: #1e293b;
+    font-size: 1.1em;
+}
+
+.report-info ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 8px;
+}
+
+.report-info li {
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.7);
+    border-radius: 8px;
+    font-size: 0.95em;
+    color: #374151;
+    border-left: 3px solid #3b82f6;
+}
+
+.report-buttons button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

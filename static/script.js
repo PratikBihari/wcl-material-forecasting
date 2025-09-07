@@ -349,21 +349,37 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function setupReportDownloads() {
         document.getElementById('downloadExcel').addEventListener('click', function() {
+            this.innerHTML = '⏳ Generating Excel...';
+            this.disabled = true;
+            
             const link = document.createElement('a');
             link.href = '/download/excel';
-            link.download = 'WCL_Forecast_Report.xlsx';
+            link.download = 'WCL_Comprehensive_Report.xlsx';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            
+            setTimeout(() => {
+                this.innerHTML = '📄 Download Excel Report';
+                this.disabled = false;
+            }, 2000);
         });
         
         document.getElementById('downloadPDF').addEventListener('click', function() {
+            this.innerHTML = '⏳ Generating PDF...';
+            this.disabled = true;
+            
             const link = document.createElement('a');
             link.href = '/download/pdf';
-            link.download = 'WCL_Forecast_Report.pdf';
+            link.download = 'WCL_Comprehensive_Report.pdf';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+            
+            setTimeout(() => {
+                this.innerHTML = '📄 Download PDF Report';
+                this.disabled = false;
+            }, 3000);
         });
     }
     
