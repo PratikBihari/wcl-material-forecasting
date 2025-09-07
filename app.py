@@ -74,21 +74,31 @@ class WCLMaterialForecaster:
         
     def prepare_features(self, df):
         # Create FY-based features
+        df = df.copy()
         df['date'] = pd.to_datetime(df['date'])
         df['month'] = df['date'].dt.month
         df['fy_month'] = df['date'].apply(self.get_fy_month)
         df['quarter'] = df['date'].dt.quarter
         
-        # Calculate moving averages and ratios
-        df['consumption_ma3'] = df['consumption'].rolling(3).mean()
-        df['consumption_ma6'] = df['consumption'].rolling(6).mean()
-        df['stock_ratio'] = df['stock'] / (df['consumption'] + 1)
+        # Calculate moving averages with minimum window handling
+        df['consumption_ma3'] = df['consumption'].rolling(window=3, min_periods=1).mean()
+        df['consumption_ma6'] = df['consumption'].rolling(window=6, min_periods=1).mean()
+        
+        # Safe division for stock ratio
+        df['stock_ratio'] = df['stock'] / (df['consumption'] + 0.1)  # Avoid division by zero
         df['safety_stock'] = df['consumption'] * 0.2  # 20% safety stock
         
-        # Fill NaN values
-        df = df.fillna(method='bfill').fillna(0)
+        # Fill NaN values with forward fill, then backward fill, then 0
+        df = df.fillna(method='ffill').fillna(method='bfill').fillna(0)
         
+        # Ensure all feature columns exist and have valid values
         features = ['fy_month', 'quarter', 'consumption_ma3', 'consumption_ma6', 'stock_ratio', 'pending_orders']
+        
+        # Replace any remaining inf or -inf values
+        for feature in features:
+            if feature in df.columns:
+                df[feature] = df[feature].replace([np.inf, -np.inf], 0)
+        
         return df[features]
     
     def get_fy_month(self, date):
@@ -112,35 +122,68 @@ class WCLMaterialForecaster:
         return forecasts, dates, accuracy
     
     def linear_forecast(self, df, periods):
-        X = self.prepare_features(df)
-        y = df['consumption'].values
-        X_scaled = self.scaler.fit_transform(X)
-        self.model.fit(X_scaled, y)
-        
-        last_date = pd.to_datetime(df['date'].iloc[-1])
-        forecasts = []
-        dates = []
-        
-        for i in range(periods):
-            future_date = last_date + pd.DateOffset(months=i+1)
-            fy_month = self.get_fy_month(future_date)
-            future_quarter = ((future_date.month - 1) // 3) + 1
+        try:
+            X = self.prepare_features(df)
+            y = df['consumption'].values
             
-            future_features = pd.DataFrame({
-                'fy_month': [fy_month],
-                'quarter': [future_quarter],
-                'consumption_ma3': [df['consumption'].tail(3).mean()],
-                'consumption_ma6': [df['consumption'].tail(6).mean()],
-                'stock_ratio': [df['stock'].iloc[-1] / (df['consumption'].tail(3).mean() + 1)],
-                'pending_orders': [df['pending_orders'].iloc[-1]]
-            })
+            # Ensure we have valid data
+            if len(X) == 0 or len(y) == 0:
+                raise ValueError("No valid features or target data")
             
-            future_scaled = self.scaler.transform(future_features)
-            forecast = self.model.predict(future_scaled)[0]
-            forecasts.append(max(0, forecast))
-            dates.append(future_date.strftime('%Y-%m-%d'))
+            # Check for constant values (would cause scaling issues)
+            if X.std().sum() == 0:
+                # If all features are constant, use simple average forecasting
+                avg_consumption = y.mean()
+                forecasts = [avg_consumption] * periods
+            else:
+                X_scaled = self.scaler.fit_transform(X)
+                self.model.fit(X_scaled, y)
             
-        return forecasts, dates
+            last_date = pd.to_datetime(df['date'].iloc[-1])
+            forecasts = []
+            dates = []
+            
+            # Calculate baseline values safely
+            consumption_ma3 = df['consumption'].tail(3).mean()
+            consumption_ma6 = df['consumption'].tail(6).mean()
+            last_stock = df['stock'].iloc[-1]
+            last_pending = df['pending_orders'].iloc[-1]
+            
+            for i in range(periods):
+                future_date = last_date + pd.DateOffset(months=i+1)
+                fy_month = self.get_fy_month(future_date)
+                future_quarter = ((future_date.month - 1) // 3) + 1
+                
+                future_features = pd.DataFrame({
+                    'fy_month': [fy_month],
+                    'quarter': [future_quarter],
+                    'consumption_ma3': [consumption_ma3],
+                    'consumption_ma6': [consumption_ma6],
+                    'stock_ratio': [last_stock / (consumption_ma3 + 0.1)],
+                    'pending_orders': [last_pending]
+                })
+                
+                if X.std().sum() == 0:
+                    # Use average if no variation in features
+                    forecast = y.mean()
+                else:
+                    future_scaled = self.scaler.transform(future_features)
+                    forecast = self.model.predict(future_scaled)[0]
+                
+                # Ensure positive forecast with reasonable bounds
+                forecast = max(0, min(forecast, y.max() * 2))  # Cap at 2x historical max
+                forecasts.append(forecast)
+                dates.append(future_date.strftime('%Y-%m-%d'))
+            
+            return forecasts, dates
+            
+        except Exception as e:
+            # Fallback to simple average-based forecasting
+            avg_consumption = df['consumption'].mean()
+            last_date = pd.to_datetime(df['date'].iloc[-1])
+            forecasts = [avg_consumption] * periods
+            dates = [(last_date + pd.DateOffset(months=i+1)).strftime('%Y-%m-%d') for i in range(periods)]
+            return forecasts, dates
     
     def arima_forecast(self, df, periods):
         # Fallback to linear regression for now
@@ -318,28 +361,45 @@ class WCLMaterialForecaster:
         # Auto-cleaning and validation
         df = df.copy()
         
-        # Convert date column
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        # Convert date column with multiple format support
+        df['date'] = pd.to_datetime(df['date'], errors='coerce', infer_datetime_format=True)
         
         # Remove rows with invalid dates
         df = df.dropna(subset=['date'])
         
-        # Fill missing values
+        if len(df) == 0:
+            raise ValueError("No valid dates found in the data")
+        
+        # Fill missing values for numeric columns
         numeric_cols = ['consumption', 'stock', 'pending_orders']
         for col in numeric_cols:
             if col in df.columns:
+                # Convert to numeric, replacing non-numeric with NaN
                 df[col] = pd.to_numeric(df[col], errors='coerce')
-                df[col] = df[col].fillna(df[col].median())
+                
+                # Fill NaN values with median (more robust than mean)
+                if df[col].isna().all():
+                    df[col] = 0  # If all values are NaN, set to 0
+                else:
+                    df[col] = df[col].fillna(df[col].median())
+                
+                # Ensure no negative values
+                df[col] = df[col].abs()
         
-        # Remove outliers (values > 3 standard deviations)
+        # Remove extreme outliers only (values > 5 standard deviations)
         for col in numeric_cols:
-            if col in df.columns:
+            if col in df.columns and len(df) > 3:
                 mean = df[col].mean()
                 std = df[col].std()
-                df = df[abs(df[col] - mean) <= 3 * std]
+                if std > 0:  # Only remove outliers if std > 0
+                    df = df[abs(df[col] - mean) <= 5 * std]
+        
+        # Ensure minimum data points
+        if len(df) < 3:
+            raise ValueError("Insufficient data points after cleaning. Need at least 3 valid records.")
         
         # Sort by date
-        df = df.sort_values('date')
+        df = df.sort_values('date').reset_index(drop=True)
         
         return df
     
